@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Environment / secrets — NEVER commit your API key
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Build output (if you add a bundler later)
+dist/
+build/

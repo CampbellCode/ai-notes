@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#534ab7" />
+<link rel="manifest" href="manifest.json" />
+<title>AI Notes</title>
+<style>
+  :root {
+    --purple: #534ab7;
+    --purple-light: #eeedfe;
+    --bg: #faf9f5;
+    --card: #ffffff;
+    --text: #2c2c2a;
+    --muted: #5f5e5a;
+    --border: #e3e1d8;
+    --green: #1d9e75;
+    --amber: #ba7517;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  header {
+    background: var(--purple);
+    color: #fff;
+    padding: 16px 16px calc(16px + env(safe-area-inset-top));
+    padding-top: max(16px, env(safe-area-inset-top));
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 500; }
+  #status {
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.18);
+  }
+  #status.online { background: rgba(29,158,117,0.9); }
+  main { padding: 16px; max-width: 640px; margin: 0 auto; }
+  .composer {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 20px;
+  }
+  textarea {
+    width: 100%;
+    border: none;
+    resize: vertical;
+    min-height: 72px;
+    font: inherit;
+    color: var(--text);
+    outline: none;
+    background: transparent;
+  }
+  .composer-actions { display: flex; gap: 8px; margin-top: 8px; }
+  button {
+    font: inherit;
+    border: none;
+    border-radius: 8px;
+    padding: 9px 14px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .btn-primary { background: var(--purple); color: #fff; }
+  .btn-secondary { background: var(--purple-light); color: var(--purple); }
+  .btn-secondary.recording { background: #f7c1c1; color: #791f1f; }
+  .btn-small { padding: 6px 12px; font-size: 13px; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .spacer { flex: 1; }
+  .note {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+  .note-text { white-space: pre-wrap; }
+  .note-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  .tag {
+    font-size: 12px;
+    padding: 2px 9px;
+    border-radius: 10px;
+    background: var(--purple-light);
+    color: var(--purple);
+  }
+  .badge { font-size: 12px; color: var(--muted); }
+  .badge.pending { color: var(--amber); }
+  .badge.enhanced { color: var(--green); }
+  .enhancement {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    font-size: 14px;
+  }
+  .enhancement h4 { margin: 8px 0 4px; font-size: 13px; color: var(--muted); font-weight: 500; }
+  .enhancement ul { margin: 4px 0; padding-left: 20px; }
+  .enhancement .summary { font-style: italic; color: var(--muted); }
+  .empty { text-align: center; color: var(--muted); padding: 40px 0; }
+  .error { color: #791f1f; font-size: 13px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Notes</h1>
+  <span id="status">checking…</span>
+</header>
+
+<main>
+  <div class="composer">
+    <textarea id="input" placeholder="Type a note… (or tap Speak)"></textarea>
+    <div class="composer-actions">
+      <button class="btn-secondary" id="speakBtn">Speak</button>
+      <span class="spacer"></span>
+      <button class="btn-primary" id="saveBtn">Save note</button>
+    </div>
+    <div class="error" id="composerError"></div>
+  </div>
+
+  <div id="notes"></div>
+</main>
+
+<script>
+// ===========================================================================
+// CONFIG
+// ===========================================================================
+// If the PWA is served BY the backend, leave this as "" (same origin).
+// If you run the frontend separately, set it to your backend address,
+// e.g. "http://192.168.1.20:3001" on your LAN, or your Tailscale address.
+const BACKEND_URL = "";
+
+// ===========================================================================
+// IndexedDB — the phone's own storage. Notes live here, fully offline.
+// ===========================================================================
+const DB_NAME = "ai-notes-db";
+const STORE = "notes";
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE)) {
+        db.createObjectStore(STORE, { keyPath: "id" });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbPut(note) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).put(note);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function dbGetAll() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readonly");
+    const req = tx.objectStore(STORE).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// ===========================================================================
+// Online status — drives whether the Enhance button is usable.
+// ===========================================================================
+let isOnline = navigator.onLine;
+const statusEl = document.getElementById("status");
+
+function setStatus(online) {
+  isOnline = online;
+  statusEl.textContent = online ? "online" : "offline";
+  statusEl.className = online ? "online" : "";
+  render(); // re-render so enhance buttons enable/disable
+}
+
+window.addEventListener("online", () => checkBackend());
+window.addEventListener("offline", () => setStatus(false));
+
+// Confirm the backend is actually reachable, not just that we have a network.
+async function checkBackend() {
+  if (!navigator.onLine) { setStatus(false); return; }
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/health`, { method: "GET" });
+    setStatus(res.ok);
+  } catch {
+    setStatus(false);
+  }
+}
+
+// ===========================================================================
+// Creating notes
+// ===========================================================================
+const input = document.getElementById("input");
+const composerError = document.getElementById("composerError");
+
+document.getElementById("saveBtn").addEventListener("click", async () => {
+  const text = input.value.trim();
+  if (!text) return;
+  const note = {
+    id: crypto.randomUUID(),
+    text,
+    status: "pending",        // pending -> enhanced
+    tags: [],
+    summary: "",
+    actionItems: [],
+    suggestions: [],
+    createdAt: Date.now(),
+  };
+  await dbPut(note);          // saved locally FIRST — never lost
+  input.value = "";
+  composerError.textContent = "";
+  render();
+});
+
+// ===========================================================================
+// Speak — uses the browser's Web Speech API.
+// NOTE: on most phones this needs a network connection (audio is transcribed
+// server-side by the browser vendor). Typing always works offline.
+// ===========================================================================
+const speakBtn = document.getElementById("speakBtn");
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+
+if (!SR) {
+  speakBtn.disabled = true;
+  speakBtn.title = "Speech recognition not supported in this browser";
+} else {
+  recognition = new SR();
+  recognition.interimResults = false;
+  recognition.lang = "en-AU";
+
+  recognition.onresult = (e) => {
+    const transcript = Array.from(e.results).map(r => r[0].transcript).join(" ");
+    input.value = (input.value ? input.value + " " : "") + transcript;
+  };
+  recognition.onerror = (e) => {
+    composerError.textContent = "Speech error: " + e.error +
+      (e.error === "network" ? " (voice needs a connection)" : "");
+  };
+  recognition.onend = () => {
+    speakBtn.textContent = "Speak";
+    speakBtn.classList.remove("recording");
+  };
+
+  speakBtn.addEventListener("click", () => {
+    if (speakBtn.classList.contains("recording")) {
+      recognition.stop();
+      return;
+    }
+    composerError.textContent = "";
+    try {
+      recognition.start();
+      speakBtn.textContent = "Stop";
+      speakBtn.classList.add("recording");
+    } catch {
+      /* already started */
+    }
+  });
+}
+
+// ===========================================================================
+// Enhancing — the ONLY thing that calls the backend, and only on demand.
+// ===========================================================================
+async function enhance(note) {
+  if (!isOnline) return;
+  const errEl = document.getElementById("err-" + note.id);
+  const btn = document.getElementById("btn-" + note.id);
+  if (errEl) errEl.textContent = "";
+  if (btn) { btn.disabled = true; btn.textContent = "Enhancing…"; }
+
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/enhance`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: note.text }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `Server returned ${res.status}`);
+    }
+    const result = await res.json();
+    const updated = { ...note, ...result, status: "enhanced" };
+    await dbPut(updated);
+    render();
+  } catch (err) {
+    if (errEl) errEl.textContent = "Enhance failed: " + err.message;
+    if (btn) { btn.disabled = false; btn.textContent = "Enhance"; }
+  }
+}
+
+// ===========================================================================
+// Rendering
+// ===========================================================================
+const notesEl = document.getElementById("notes");
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+async function render() {
+  const notes = (await dbGetAll()).sort((a, b) => b.createdAt - a.createdAt);
+
+  if (notes.length === 0) {
+    notesEl.innerHTML = '<div class="empty">No notes yet. Capture your first one above.</div>';
+    return;
+  }
+
+  notesEl.innerHTML = notes.map((n) => {
+    const tags = (n.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("");
+    const canEnhance = isOnline && n.status === "pending";
+
+    let enhancement = "";
+    if (n.status === "enhanced") {
+      const actions = (n.actionItems || []).map(a => `<li>${escapeHtml(a)}</li>`).join("");
+      const suggs = (n.suggestions || []).map(s => `<li>${escapeHtml(s)}</li>`).join("");
+      enhancement = `
+        <div class="enhancement">
+          ${n.summary ? `<div class="summary">${escapeHtml(n.summary)}</div>` : ""}
+          ${actions ? `<h4>Action items</h4><ul>${actions}</ul>` : ""}
+          ${suggs ? `<h4>Suggestions</h4><ul>${suggs}</ul>` : ""}
+        </div>`;
+    }
+
+    return `
+      <div class="note">
+        <div class="note-text">${escapeHtml(n.text)}</div>
+        <div class="note-meta">
+          ${tags}
+          <span class="badge ${n.status}">${n.status === "enhanced" ? "✓ enhanced" : "● pending"}</span>
+          <span class="spacer"></span>
+          ${n.status === "pending"
+            ? `<button class="btn-secondary btn-small" id="btn-${n.id}"
+                 ${canEnhance ? "" : "disabled"}
+                 onclick="window._enhanceById('${n.id}')">Enhance</button>`
+            : ""}
+        </div>
+        <div class="error" id="err-${n.id}"></div>
+        ${enhancement}
+      </div>`;
+  }).join("");
+}
+
+// Bridge for inline onclick (kept simple for a no-build single file).
+window._enhanceById = async (id) => {
+  const notes = await dbGetAll();
+  const note = notes.find(n => n.id === id);
+  if (note) enhance(note);
+};
+
+// ===========================================================================
+// Boot
+// ===========================================================================
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+render();
+checkBackend();
+</script>
+</body>
+</html>

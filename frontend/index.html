@@ -43,6 +43,16 @@
     background: rgba(255,255,255,0.18);
   }
   #status.online { background: rgba(29,158,117,0.9); }
+  #settingsBtn {
+    background: rgba(255,255,255,0.18);
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 18px;
+    padding: 4px 10px;
+    cursor: pointer;
+    line-height: 1;
+  }
   main { padding: 16px; max-width: 640px; margin: 0 auto; }
   .composer {
     background: var(--card);
@@ -73,6 +83,7 @@
   .btn-primary { background: var(--purple); color: #fff; }
   .btn-secondary { background: var(--purple-light); color: var(--purple); }
   .btn-secondary.recording { background: #f7c1c1; color: #791f1f; }
+  .btn-danger { background: #fdecea; color: #791f1f; }
   .btn-small { padding: 6px 12px; font-size: 13px; }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   .spacer { flex: 1; }
@@ -112,15 +123,63 @@
   .enhancement .summary { font-style: italic; color: var(--muted); }
   .empty { text-align: center; color: var(--muted); padding: 40px 0; }
   .error { color: #791f1f; font-size: 13px; margin-top: 8px; }
+  .no-key-banner {
+    background: #fff8ec;
+    border: 1px solid #f0d58c;
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    color: var(--amber);
+  }
+
+  /* Settings overlay */
+  .overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 100;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .overlay.open { display: flex; }
+  .settings-card {
+    background: var(--card);
+    border-radius: 16px 16px 0 0;
+    padding: 24px 20px calc(24px + env(safe-area-inset-bottom));
+    width: 100%;
+    max-width: 640px;
+  }
+  .settings-card h2 { margin: 0 0 16px; font-size: 17px; }
+  .settings-card label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .settings-card input[type="password"],
+  .settings-card input[type="text"] {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+    margin-bottom: 12px;
+  }
+  .settings-card input:focus { border-color: var(--purple); }
+  .settings-actions { display: flex; gap: 8px; }
 </style>
 </head>
 <body>
 <header>
   <h1>AI Notes</h1>
   <span id="status">checking…</span>
+  <button id="settingsBtn" onclick="openSettings()">⚙</button>
 </header>
 
 <main>
+  <div id="noKeyBanner" class="no-key-banner" style="display:none">
+    No API key set — tap ⚙ to add your Anthropic key and enable AI enhancement.
+  </div>
+
   <div class="composer">
     <textarea id="input" placeholder="Type a note… (or tap Speak)"></textarea>
     <div class="composer-actions">
@@ -134,14 +193,59 @@
   <div id="notes"></div>
 </main>
 
+<!-- Settings overlay -->
+<div class="overlay" id="settingsOverlay" onclick="overlayClick(event)">
+  <div class="settings-card">
+    <h2>Settings</h2>
+    <label for="apiKeyInput">Anthropic API Key</label>
+    <input type="password" id="apiKeyInput" placeholder="sk-ant-…" autocomplete="off" />
+    <p style="font-size:13px; color:var(--muted); margin:0 0 16px">
+      Your key is stored only on this device in localStorage. It's never sent anywhere except directly to Anthropic when you tap Enhance.
+    </p>
+    <div class="settings-actions">
+      <button class="btn-primary" onclick="saveApiKey()">Save key</button>
+      <button class="btn-danger" onclick="clearApiKey()">Clear key</button>
+      <span class="spacer"></span>
+      <button class="btn-secondary" onclick="closeSettings()">Done</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ===========================================================================
-// CONFIG
+// API Key — stored in localStorage, never leaves the device except to Anthropic
 // ===========================================================================
-// If the PWA is served BY the backend, leave this as "" (same origin).
-// If you run the frontend separately, set it to your backend address,
-// e.g. "http://192.168.1.20:3001" on your LAN, or your Tailscale address.
-const BACKEND_URL = "";
+const API_KEY_STORAGE = "anthropic_api_key";
+
+function getApiKey() { return localStorage.getItem(API_KEY_STORAGE) || ""; }
+
+function saveApiKey() {
+  const val = document.getElementById("apiKeyInput").value.trim();
+  if (val) localStorage.setItem(API_KEY_STORAGE, val);
+  closeSettings();
+  render();
+}
+
+function clearApiKey() {
+  localStorage.removeItem(API_KEY_STORAGE);
+  document.getElementById("apiKeyInput").value = "";
+  closeSettings();
+  render();
+}
+
+function openSettings() {
+  const key = getApiKey();
+  document.getElementById("apiKeyInput").value = key;
+  document.getElementById("settingsOverlay").classList.add("open");
+}
+
+function closeSettings() {
+  document.getElementById("settingsOverlay").classList.remove("open");
+}
+
+function overlayClick(e) {
+  if (e.target === document.getElementById("settingsOverlay")) closeSettings();
+}
 
 // ===========================================================================
 // IndexedDB — the phone's own storage. Notes live here, fully offline.
@@ -184,7 +288,7 @@ async function dbGetAll() {
 }
 
 // ===========================================================================
-// Online status — drives whether the Enhance button is usable.
+// Online status
 // ===========================================================================
 let isOnline = navigator.onLine;
 const statusEl = document.getElementById("status");
@@ -193,22 +297,11 @@ function setStatus(online) {
   isOnline = online;
   statusEl.textContent = online ? "online" : "offline";
   statusEl.className = online ? "online" : "";
-  render(); // re-render so enhance buttons enable/disable
+  render();
 }
 
-window.addEventListener("online", () => checkBackend());
+window.addEventListener("online", () => setStatus(true));
 window.addEventListener("offline", () => setStatus(false));
-
-// Confirm the backend is actually reachable, not just that we have a network.
-async function checkBackend() {
-  if (!navigator.onLine) { setStatus(false); return; }
-  try {
-    const res = await fetch(`${BACKEND_URL}/api/health`, { method: "GET" });
-    setStatus(res.ok);
-  } catch {
-    setStatus(false);
-  }
-}
 
 // ===========================================================================
 // Creating notes
@@ -222,23 +315,21 @@ document.getElementById("saveBtn").addEventListener("click", async () => {
   const note = {
     id: crypto.randomUUID(),
     text,
-    status: "pending",        // pending -> enhanced
+    status: "pending",
     tags: [],
     summary: "",
     actionItems: [],
     suggestions: [],
     createdAt: Date.now(),
   };
-  await dbPut(note);          // saved locally FIRST — never lost
+  await dbPut(note);
   input.value = "";
   composerError.textContent = "";
   render();
 });
 
 // ===========================================================================
-// Speak — uses the browser's Web Speech API.
-// NOTE: on most phones this needs a network connection (audio is transcribed
-// server-side by the browser vendor). Typing always works offline.
+// Speak
 // ===========================================================================
 const speakBtn = document.getElementById("speakBtn");
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -275,35 +366,84 @@ if (!SR) {
       recognition.start();
       speakBtn.textContent = "Stop";
       speakBtn.classList.add("recording");
-    } catch {
-      /* already started */
-    }
+    } catch { /* already started */ }
   });
 }
 
 // ===========================================================================
-// Enhancing — the ONLY thing that calls the backend, and only on demand.
+// AI Enhancement — calls Anthropic directly from the browser.
+// The API key never leaves this device except to api.anthropic.com.
 // ===========================================================================
+const ALLOWED_TAGS = ["work", "projects", "fun", "todo", "ideas", "personal"];
+
+function buildPrompt(noteText) {
+  return `You are a tagging assistant for a personal notes app.
+
+Classify the note into one or more of these tags ONLY:
+${ALLOWED_TAGS.join(", ")}.
+If none fit well, use an empty array. Do NOT invent new tags.
+
+Then provide enhancements:
+- summary: one short sentence capturing the gist
+- actionItems: array of concrete next steps (empty array if none)
+- suggestions: array of brief helpful ideas (empty array if none)
+
+Respond with ONLY valid JSON in exactly this shape, no other text:
+{"tags": [], "summary": "", "actionItems": [], "suggestions": []}
+
+Note:
+"""
+${noteText}
+"""`;
+}
+
+function parseResult(raw) {
+  const cleaned = raw.replace(/```json|```/g, "").trim();
+  const parsed = JSON.parse(cleaned);
+  const tags = Array.isArray(parsed.tags)
+    ? parsed.tags.filter(t => ALLOWED_TAGS.includes(t))
+    : [];
+  return {
+    tags,
+    summary: typeof parsed.summary === "string" ? parsed.summary : "",
+    actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
+    suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : [],
+  };
+}
+
 async function enhance(note) {
-  if (!isOnline) return;
+  const apiKey = getApiKey();
+  if (!isOnline || !apiKey) return;
+
   const errEl = document.getElementById("err-" + note.id);
   const btn = document.getElementById("btn-" + note.id);
   if (errEl) errEl.textContent = "";
   if (btn) { btn.disabled = true; btn.textContent = "Enhancing…"; }
 
   try {
-    const res = await fetch(`${BACKEND_URL}/api/enhance`, {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: note.text }),
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        messages: [{ role: "user", content: buildPrompt(note.text) }],
+      }),
     });
+
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `Server returned ${res.status}`);
+      const body = await res.text();
+      throw new Error(`API error ${res.status}: ${body}`);
     }
-    const result = await res.json();
-    const updated = { ...note, ...result, status: "enhanced" };
-    await dbPut(updated);
+
+    const data = await res.json();
+    const result = parseResult(data.content[0].text);
+    await dbPut({ ...note, ...result, status: "enhanced" });
     render();
   } catch (err) {
     if (errEl) errEl.textContent = "Enhance failed: " + err.message;
@@ -323,6 +463,9 @@ function escapeHtml(s) {
 }
 
 async function render() {
+  const hasKey = !!getApiKey();
+  document.getElementById("noKeyBanner").style.display = hasKey ? "none" : "block";
+
   const notes = (await dbGetAll()).sort((a, b) => b.createdAt - a.createdAt);
 
   if (notes.length === 0) {
@@ -332,7 +475,7 @@ async function render() {
 
   notesEl.innerHTML = notes.map((n) => {
     const tags = (n.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("");
-    const canEnhance = isOnline && n.status === "pending";
+    const canEnhance = isOnline && hasKey && n.status === "pending";
 
     let enhancement = "";
     if (n.status === "enhanced") {
@@ -365,7 +508,6 @@ async function render() {
   }).join("");
 }
 
-// Bridge for inline onclick (kept simple for a no-build single file).
 window._enhanceById = async (id) => {
   const notes = await dbGetAll();
   const note = notes.find(n => n.id === id);
@@ -378,8 +520,8 @@ window._enhanceById = async (id) => {
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").catch(() => {});
 }
+setStatus(navigator.onLine);
 render();
-checkBackend();
 </script>
 </body>
 </html>

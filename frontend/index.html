@@ -411,6 +411,14 @@ function formatCost(aud) {
   return "A$" + aud.toFixed(4);
 }
 
+function formatTimestamp(ts) {
+  if (ts == null) return "";
+  return new Date(ts).toLocaleString(undefined, {
+    year: "numeric", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit",
+  });
+}
+
 function buildPrompt(noteText) {
   return `You are a tagging assistant for a personal notes app.
 
@@ -531,6 +539,7 @@ async function render() {
         <div class="note-text">${escapeHtml(n.text)}</div>
         <div class="note-meta">
           ${tags}
+          <span class="badge timestamp" title="Created">${escapeHtml(formatTimestamp(n.createdAt))}</span>
           <span class="badge ${n.status}">${n.status === "enhanced" ? "✓ enhanced" : "● pending"}</span>
           ${n.costAUD != null ? `<span class="badge" title="Estimated API cost">${formatCost(n.costAUD)}</span>` : ""}
           <span class="spacer"></span>

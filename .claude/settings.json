@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push origin main)",
+      "Bash(git push origin main *)",
+      "Bash(git push --force origin main)",
+      "Bash(git push -f origin main)",
+      "Bash(git push origin HEAD:main)",
+      "Bash(git push --force-with-lease origin main)",
+      "PowerShell(git push origin main)",
+      "PowerShell(git push --force origin main)",
+      "PowerShell(git push -f origin main)",
+      "PowerShell(git push origin HEAD:main)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "input=$(cat); cmd=$(echo \"$input\" | node -e 'let d=\"\";process.stdin.on(\"data\",c=>d+=c);process.stdin.on(\"end\",()=>console.log(JSON.parse(d).tool_input?.command||\"\"))' 2>/dev/null); if echo \"$cmd\" | grep -qE 'git[[:space:]]+push.*main'; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Direct push to main is blocked. Create a feature branch and open a PR instead.\"}}'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -126,6 +126,27 @@
   .enhancement .links a { color: var(--purple); word-break: break-word; }
   .empty { text-align: center; color: var(--muted); padding: 40px 0; }
   .error { color: #791f1f; font-size: 13px; margin-top: 8px; }
+  .note-compact {
+    cursor: pointer;
+    padding: 12px 14px;
+  }
+  .note-compact:hover, .note-compact:active { background: var(--purple-light); }
+  .note-list-title { font-size: 15px; font-weight: 600; line-height: 1.4; }
+  .note-list-meta { display: flex; gap: 8px; align-items: center; margin-top: 5px; }
+  .back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--purple-light);
+    color: var(--purple);
+    border: none;
+    border-radius: 8px;
+    padding: 7px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    margin-bottom: 12px;
+  }
   .no-key-banner {
     background: #fff8ec;
     border: 1px solid #f0d58c;
@@ -547,6 +568,7 @@ async function enhance(note) {
 // Rendering
 // ===========================================================================
 const notesEl = document.getElementById("notes");
+let selectedNoteId = null;
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => (
@@ -554,58 +576,108 @@ function escapeHtml(s) {
   ));
 }
 
+function openNote(id) {
+  selectedNoteId = id;
+  window.scrollTo(0, 0);
+  render();
+}
+
+function closeNote() {
+  selectedNoteId = null;
+  window.scrollTo(0, 0);
+  render();
+}
+
+function renderCompact(n) {
+  const displayTitle = n.title || (n.text.length > 80 ? n.text.slice(0, 80) + "…" : n.text);
+  const statusClass = n.status === "enhanced" ? "enhanced" : "pending";
+  const statusLabel = n.status === "enhanced" ? "✓ enhanced" : "● pending";
+  const canEnhance = isOnline && !!getApiKey() && n.status === "pending";
+  const enhanceBtn = n.status === "pending"
+    ? `<button class="btn-secondary btn-small" id="btn-${n.id}"
+         ${canEnhance ? "" : "disabled"}
+         onclick="event.stopPropagation(); window._enhanceById('${n.id}')">Enhance</button>`
+    : "";
+  return `
+    <div class="note note-compact" onclick="openNote('${n.id}')">
+      <div class="note-list-title">${escapeHtml(displayTitle)}</div>
+      <div class="note-list-meta">
+        <span class="badge">${escapeHtml(formatTimestamp(n.createdAt))}</span>
+        <span class="badge ${statusClass}">${statusLabel}</span>
+        <span class="spacer"></span>
+        ${enhanceBtn}
+      </div>
+      <div class="error" id="err-${n.id}"></div>
+    </div>`;
+}
+
+function renderDetail(n, canEnhance) {
+  const tags = (n.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("");
+
+  let enhancement = "";
+  if (n.status === "enhanced") {
+    const steps = (n.steps || n.actionItems || []).map(a => `<li>${escapeHtml(a)}</li>`).join("");
+    const tips = (n.tips || n.suggestions || []).map(s => `<li>${escapeHtml(s)}</li>`).join("");
+    const links = (n.links || []).map(l =>
+      `<li><a href="${escapeHtml(l.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label)}</a></li>`
+    ).join("");
+    enhancement = `
+      <div class="enhancement">
+        ${n.summary ? `<div class="summary">${escapeHtml(n.summary)}</div>` : ""}
+        ${steps ? `<h4>Steps</h4><ol>${steps}</ol>` : ""}
+        ${tips ? `<h4>Tips</h4><ul>${tips}</ul>` : ""}
+        ${links ? `<h4>Links</h4><ul class="links">${links}</ul>` : ""}
+      </div>`;
+  }
+
+  return `
+    <button class="back-btn" onclick="closeNote()">← Back</button>
+    <div class="note">
+      ${n.title ? `<div class="note-title">${escapeHtml(n.title)}</div>` : ""}
+      <div class="note-text">${escapeHtml(n.text)}</div>
+      <div class="note-meta">
+        ${tags}
+        <span class="badge timestamp" title="Created">${escapeHtml(formatTimestamp(n.createdAt))}</span>
+        <span class="badge ${n.status}">${n.status === "enhanced" ? "✓ enhanced" : "● pending"}</span>
+        ${n.costAUD != null ? `<span class="badge" title="Estimated API cost">${formatCost(n.costAUD)}</span>` : ""}
+        <span class="spacer"></span>
+        ${n.status === "pending"
+          ? `<button class="btn-secondary btn-small" id="btn-${n.id}"
+               ${canEnhance ? "" : "disabled"}
+               onclick="window._enhanceById('${n.id}')">Enhance</button>`
+          : ""}
+        <button class="btn-danger btn-small" onclick="window._deleteById('${n.id}')">Delete</button>
+      </div>
+      <div class="error" id="err-${n.id}"></div>
+      ${enhancement}
+    </div>`;
+}
+
 async function render() {
   const hasKey = !!getApiKey();
-  document.getElementById("noKeyBanner").style.display = hasKey ? "none" : "block";
+  const inDetail = !!selectedNoteId;
+
+  document.getElementById("noKeyBanner").style.display = (!inDetail && !hasKey) ? "block" : "none";
+  document.querySelector(".composer").style.display = inDetail ? "none" : "";
 
   const notes = (await dbGetAll()).sort((a, b) => b.createdAt - a.createdAt);
+
+  if (inDetail) {
+    const note = notes.find(n => n.id === selectedNoteId);
+    if (!note) {
+      selectedNoteId = null;
+    } else {
+      notesEl.innerHTML = renderDetail(note, isOnline && hasKey && note.status === "pending");
+      return;
+    }
+  }
 
   if (notes.length === 0) {
     notesEl.innerHTML = '<div class="empty">No notes yet. Capture your first one above.</div>';
     return;
   }
 
-  notesEl.innerHTML = notes.map((n) => {
-    const tags = (n.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("");
-    const canEnhance = isOnline && hasKey && n.status === "pending";
-
-    let enhancement = "";
-    if (n.status === "enhanced") {
-      const steps = (n.steps || n.actionItems || []).map(a => `<li>${escapeHtml(a)}</li>`).join("");
-      const tips = (n.tips || n.suggestions || []).map(s => `<li>${escapeHtml(s)}</li>`).join("");
-      const links = (n.links || []).map(l =>
-        `<li><a href="${escapeHtml(l.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label)}</a></li>`
-      ).join("");
-      enhancement = `
-        <div class="enhancement">
-          ${n.summary ? `<div class="summary">${escapeHtml(n.summary)}</div>` : ""}
-          ${steps ? `<h4>Steps</h4><ol>${steps}</ol>` : ""}
-          ${tips ? `<h4>Tips</h4><ul>${tips}</ul>` : ""}
-          ${links ? `<h4>Links</h4><ul class="links">${links}</ul>` : ""}
-        </div>`;
-    }
-
-    return `
-      <div class="note">
-        ${n.title ? `<div class="note-title">${escapeHtml(n.title)}</div>` : ""}
-        <div class="note-text">${escapeHtml(n.text)}</div>
-        <div class="note-meta">
-          ${tags}
-          <span class="badge timestamp" title="Created">${escapeHtml(formatTimestamp(n.createdAt))}</span>
-          <span class="badge ${n.status}">${n.status === "enhanced" ? "✓ enhanced" : "● pending"}</span>
-          ${n.costAUD != null ? `<span class="badge" title="Estimated API cost">${formatCost(n.costAUD)}</span>` : ""}
-          <span class="spacer"></span>
-          ${n.status === "pending"
-            ? `<button class="btn-secondary btn-small" id="btn-${n.id}"
-                 ${canEnhance ? "" : "disabled"}
-                 onclick="window._enhanceById('${n.id}')">Enhance</button>`
-            : ""}
-          <button class="btn-danger btn-small" onclick="window._deleteById('${n.id}')">Delete</button>
-        </div>
-        <div class="error" id="err-${n.id}"></div>
-        ${enhancement}
-      </div>`;
-  }).join("");
+  notesEl.innerHTML = notes.map(renderCompact).join("");
 }
 
 window._enhanceById = async (id) => {
@@ -617,6 +689,7 @@ window._enhanceById = async (id) => {
 window._deleteById = async (id) => {
   if (!confirm("Delete this note?")) return;
   await dbDelete(id);
+  if (selectedNoteId === id) selectedNoteId = null;
   render();
 };
 

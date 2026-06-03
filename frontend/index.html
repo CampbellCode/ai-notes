@@ -202,6 +202,11 @@
     <p style="font-size:13px; color:var(--muted); margin:0 0 16px">
       Your key is stored only on this device in localStorage. It's never sent anywhere except directly to Anthropic when you tap Enhance.
     </p>
+    <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-bottom:16px; font-size:13px;">
+      <span style="color:var(--muted);">Total AI spend (this device)</span>
+      <strong id="totalSpent" style="float:right;">—</strong>
+      <div style="clear:both; font-size:11px; color:var(--muted); margin-top:2px;">Estimated · A$ · approx. exchange rate</div>
+    </div>
     <div class="settings-actions">
       <button class="btn-primary" onclick="saveApiKey()">Save key</button>
       <button class="btn-danger" onclick="clearApiKey()">Clear key</button>
@@ -233,9 +238,12 @@ function clearApiKey() {
   render();
 }
 
-function openSettings() {
+async function openSettings() {
   const key = getApiKey();
   document.getElementById("apiKeyInput").value = key;
+  const notes = await dbGetAll();
+  const total = notes.reduce((sum, n) => sum + (n.costAUD || 0), 0);
+  document.getElementById("totalSpent").textContent = total > 0 ? formatCost(total) : "A$0.00";
   document.getElementById("settingsOverlay").classList.add("open");
 }
 
@@ -386,6 +394,23 @@ if (!SR) {
 // ===========================================================================
 const ALLOWED_TAGS = ["work", "projects", "fun", "todo", "ideas", "personal"];
 
+// Haiku 4.5 pricing: $1.00 / M input tokens, $5.00 / M output tokens (USD)
+const PRICE_INPUT_PER_M  = 1.00;
+const PRICE_OUTPUT_PER_M = 5.00;
+const USD_TO_AUD = 1.57; // approximate — update if rate drifts
+
+function calcCostAUD(inputTokens, outputTokens) {
+  const usd = (inputTokens * PRICE_INPUT_PER_M + outputTokens * PRICE_OUTPUT_PER_M) / 1_000_000;
+  return usd * USD_TO_AUD;
+}
+
+function formatCost(aud) {
+  if (aud <= 0) return "A$0.00";
+  if (aud < 0.000001) return "<A$0.000001";
+  if (aud < 0.01) return "A$" + aud.toFixed(6);
+  return "A$" + aud.toFixed(4);
+}
+
 function buildPrompt(noteText) {
   return `You are a tagging assistant for a personal notes app.
 
@@ -453,7 +478,9 @@ async function enhance(note) {
 
     const data = await res.json();
     const result = parseResult(data.content[0].text);
-    await dbPut({ ...note, ...result, status: "enhanced" });
+    const { input_tokens, output_tokens } = data.usage;
+    const costAUD = calcCostAUD(input_tokens, output_tokens);
+    await dbPut({ ...note, ...result, status: "enhanced", costAUD });
     render();
   } catch (err) {
     if (errEl) errEl.textContent = "Enhance failed: " + err.message;
@@ -505,6 +532,7 @@ async function render() {
         <div class="note-meta">
           ${tags}
           <span class="badge ${n.status}">${n.status === "enhanced" ? "✓ enhanced" : "● pending"}</span>
+          ${n.costAUD != null ? `<span class="badge" title="Estimated API cost">${formatCost(n.costAUD)}</span>` : ""}
           <span class="spacer"></span>
           ${n.status === "pending"
             ? `<button class="btn-secondary btn-small" id="btn-${n.id}"

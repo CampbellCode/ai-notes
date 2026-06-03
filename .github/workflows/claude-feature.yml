@@ -57,7 +57,7 @@ jobs:
 
           Implement this feature now. Make only the necessary code changes."
 
-          claude -p "$PROMPT" --allowedTools "Read,Edit,Write"
+          claude -p "$PROMPT" --allowedTools "Read,Edit,Write" --model claude-haiku-4-5-20251001
 
       - name: Commit changes
         id: commit

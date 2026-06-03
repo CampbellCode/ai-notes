@@ -94,6 +94,7 @@
     padding: 14px;
     margin-bottom: 12px;
   }
+  .note-title { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
   .note-text { white-space: pre-wrap; }
   .note-meta {
     display: flex;
@@ -335,6 +336,7 @@ document.getElementById("saveBtn").addEventListener("click", async () => {
     text,
     status: "pending",
     tags: [],
+    title: "",
     summary: "",
     actionItems: [],
     suggestions: [],
@@ -427,12 +429,13 @@ ${ALLOWED_TAGS.join(", ")}.
 If none fit well, use an empty array. Do NOT invent new tags.
 
 Then provide enhancements:
+- title: a short, descriptive title for the note (a few words, no trailing punctuation)
 - summary: one short sentence capturing the gist
 - actionItems: array of concrete next steps (empty array if none)
 - suggestions: array of brief helpful ideas (empty array if none)
 
 Respond with ONLY valid JSON in exactly this shape, no other text:
-{"tags": [], "summary": "", "actionItems": [], "suggestions": []}
+{"tags": [], "title": "", "summary": "", "actionItems": [], "suggestions": []}
 
 Note:
 """
@@ -448,6 +451,7 @@ function parseResult(raw) {
     : [];
   return {
     tags,
+    title: typeof parsed.title === "string" ? parsed.title : "",
     summary: typeof parsed.summary === "string" ? parsed.summary : "",
     actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
     suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : [],
@@ -536,6 +540,7 @@ async function render() {
 
     return `
       <div class="note">
+        ${n.title ? `<div class="note-title">${escapeHtml(n.title)}</div>` : ""}
         <div class="note-text">${escapeHtml(n.text)}</div>
         <div class="note-meta">
           ${tags}

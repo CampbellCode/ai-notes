@@ -287,6 +287,16 @@ async function dbGetAll() {
   });
 }
 
+async function dbDelete(id) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 // ===========================================================================
 // Online status
 // ===========================================================================
@@ -501,6 +511,7 @@ async function render() {
                  ${canEnhance ? "" : "disabled"}
                  onclick="window._enhanceById('${n.id}')">Enhance</button>`
             : ""}
+          <button class="btn-danger btn-small" onclick="window._deleteById('${n.id}')">Delete</button>
         </div>
         <div class="error" id="err-${n.id}"></div>
         ${enhancement}
@@ -512,6 +523,12 @@ window._enhanceById = async (id) => {
   const notes = await dbGetAll();
   const note = notes.find(n => n.id === id);
   if (note) enhance(note);
+};
+
+window._deleteById = async (id) => {
+  if (!confirm("Delete this note?")) return;
+  await dbDelete(id);
+  render();
 };
 
 // ===========================================================================

@@ -592,13 +592,22 @@ function renderCompact(n) {
   const displayTitle = n.title || (n.text.length > 80 ? n.text.slice(0, 80) + "…" : n.text);
   const statusClass = n.status === "enhanced" ? "enhanced" : "pending";
   const statusLabel = n.status === "enhanced" ? "✓ enhanced" : "● pending";
+  const canEnhance = isOnline && !!getApiKey() && n.status === "pending";
+  const enhanceBtn = n.status === "pending"
+    ? `<button class="btn-secondary btn-small" id="btn-${n.id}"
+         ${canEnhance ? "" : "disabled"}
+         onclick="event.stopPropagation(); window._enhanceById('${n.id}')">Enhance</button>`
+    : "";
   return `
     <div class="note note-compact" onclick="openNote('${n.id}')">
       <div class="note-list-title">${escapeHtml(displayTitle)}</div>
       <div class="note-list-meta">
         <span class="badge">${escapeHtml(formatTimestamp(n.createdAt))}</span>
         <span class="badge ${statusClass}">${statusLabel}</span>
+        <span class="spacer"></span>
+        ${enhanceBtn}
       </div>
+      <div class="error" id="err-${n.id}"></div>
     </div>`;
 }
 

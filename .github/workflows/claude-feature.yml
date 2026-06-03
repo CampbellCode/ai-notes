@@ -86,7 +86,7 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           BRANCH: ${{ steps.branch.outputs.branch }}
         run: |
-          git push origin "$BRANCH"
+          git push --force origin "$BRANCH"
           PR_URL=$(gh pr create \
             --title "${ISSUE_TITLE}" \
             --body "Closes #${ISSUE_NUMBER}

@@ -120,8 +120,10 @@
     font-size: 14px;
   }
   .enhancement h4 { margin: 8px 0 4px; font-size: 13px; color: var(--muted); font-weight: 500; }
-  .enhancement ul { margin: 4px 0; padding-left: 20px; }
+  .enhancement ul, .enhancement ol { margin: 4px 0; padding-left: 20px; }
+  .enhancement li { margin: 3px 0; line-height: 1.45; }
   .enhancement .summary { font-style: italic; color: var(--muted); }
+  .enhancement .links a { color: var(--purple); word-break: break-word; }
   .empty { text-align: center; color: var(--muted); padding: 40px 0; }
   .error { color: #791f1f; font-size: 13px; margin-top: 8px; }
   .no-key-banner {
@@ -338,8 +340,9 @@ document.getElementById("saveBtn").addEventListener("click", async () => {
     tags: [],
     title: "",
     summary: "",
-    actionItems: [],
-    suggestions: [],
+    steps: [],
+    tips: [],
+    links: [],
     createdAt: Date.now(),
   };
   await dbPut(note);
@@ -422,20 +425,21 @@ function formatTimestamp(ts) {
 }
 
 function buildPrompt(noteText) {
-  return `You are a tagging assistant for a personal notes app.
+  return `You are a research and tagging assistant for a personal notes app. Be genuinely helpful and detailed.
 
 Classify the note into one or more of these tags ONLY:
 ${ALLOWED_TAGS.join(", ")}.
 If none fit well, use an empty array. Do NOT invent new tags.
 
-Then provide enhancements:
+Then provide a rich, detailed enhancement:
 - title: a short, descriptive title for the note (a few words, no trailing punctuation)
-- summary: one short sentence capturing the gist
-- actionItems: array of concrete next steps (empty array if none)
-- suggestions: array of brief helpful ideas (empty array if none)
+- summary: a clear 2-4 sentence overview capturing the gist and any useful context
+- steps: array of concrete next steps, each written as a full, specific instruction the reader can actually follow (explain the "how", not just the "what"). Empty array if none.
+- tips: array of helpful tips, best practices, or things to watch out for, each a full sentence. Empty array if none.
+- links: array of relevant, genuinely useful resources, each an object {"label": "short description", "url": "https://..."}. Only include real, well-known URLs you are confident exist — never invent links. Empty array if none.
 
 Respond with ONLY valid JSON in exactly this shape, no other text:
-{"tags": [], "title": "", "summary": "", "actionItems": [], "suggestions": []}
+{"tags": [], "title": "", "summary": "", "steps": [], "tips": [], "links": []}
 
 Note:
 """
@@ -449,12 +453,18 @@ function parseResult(raw) {
   const tags = Array.isArray(parsed.tags)
     ? parsed.tags.filter(t => ALLOWED_TAGS.includes(t))
     : [];
+  const links = Array.isArray(parsed.links)
+    ? parsed.links
+        .filter(l => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url))
+        .map(l => ({ label: typeof l.label === "string" && l.label ? l.label : l.url, url: l.url }))
+    : [];
   return {
     tags,
     title: typeof parsed.title === "string" ? parsed.title : "",
     summary: typeof parsed.summary === "string" ? parsed.summary : "",
-    actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
-    suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : [],
+    steps: Array.isArray(parsed.steps) ? parsed.steps : [],
+    tips: Array.isArray(parsed.tips) ? parsed.tips : [],
+    links,
   };
 }
 
@@ -478,7 +488,7 @@ async function enhance(note) {
       },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 1024,
+        max_tokens: 2048,
         messages: [{ role: "user", content: buildPrompt(note.text) }],
       }),
     });
@@ -528,13 +538,17 @@ async function render() {
 
     let enhancement = "";
     if (n.status === "enhanced") {
-      const actions = (n.actionItems || []).map(a => `<li>${escapeHtml(a)}</li>`).join("");
-      const suggs = (n.suggestions || []).map(s => `<li>${escapeHtml(s)}</li>`).join("");
+      const steps = (n.steps || n.actionItems || []).map(a => `<li>${escapeHtml(a)}</li>`).join("");
+      const tips = (n.tips || n.suggestions || []).map(s => `<li>${escapeHtml(s)}</li>`).join("");
+      const links = (n.links || []).map(l =>
+        `<li><a href="${escapeHtml(l.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label)}</a></li>`
+      ).join("");
       enhancement = `
         <div class="enhancement">
           ${n.summary ? `<div class="summary">${escapeHtml(n.summary)}</div>` : ""}
-          ${actions ? `<h4>Action items</h4><ul>${actions}</ul>` : ""}
-          ${suggs ? `<h4>Suggestions</h4><ul>${suggs}</ul>` : ""}
+          ${steps ? `<h4>Steps</h4><ol>${steps}</ol>` : ""}
+          ${tips ? `<h4>Tips</h4><ul>${tips}</ul>` : ""}
+          ${links ? `<h4>Links</h4><ul class="links">${links}</ul>` : ""}
         </div>`;
     }
 

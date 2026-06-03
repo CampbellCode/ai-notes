@@ -43,7 +43,7 @@
     background: rgba(255,255,255,0.18);
   }
   #status.online { background: rgba(29,158,117,0.9); }
-  #settingsBtn {
+  .header-icon-btn {
     background: rgba(255,255,255,0.18);
     border: none;
     border-radius: 8px;
@@ -169,13 +169,28 @@
   }
   .settings-card input:focus { border-color: var(--purple); }
   .settings-actions { display: flex; gap: 8px; }
+
+  /* Dark mode */
+  body.dark {
+    --bg: #1a1a18;
+    --card: #252523;
+    --text: #e8e7e3;
+    --muted: #9a9890;
+    --border: #3a3935;
+    --purple-light: #0a2e33;
+  }
+  body.dark .no-key-banner { background: #2a2310; border-color: #6b5010; }
+  body.dark .btn-danger { background: #2a1010; color: #e87070; }
+  body.dark .settings-card input[type="password"],
+  body.dark .settings-card input[type="text"] { background: var(--bg); color: var(--text); }
 </style>
 </head>
 <body>
 <header>
   <h1>AI Notes</h1>
   <span id="status">checking…</span>
-  <button id="settingsBtn" onclick="openSettings()">⚙</button>
+  <button id="darkBtn" class="header-icon-btn" onclick="toggleDarkMode()">🌙</button>
+  <button id="settingsBtn" class="header-icon-btn" onclick="openSettings()">⚙</button>
 </header>
 
 <main>
@@ -220,6 +235,24 @@
 </div>
 
 <script>
+// ===========================================================================
+// Dark mode
+// ===========================================================================
+const DARK_KEY = "dark_mode";
+
+function applyDarkMode(isDark) {
+  document.body.classList.toggle("dark", isDark);
+  const btn = document.getElementById("darkBtn");
+  if (btn) btn.textContent = isDark ? "☀️" : "🌙";
+  document.querySelector('meta[name="theme-color"]').setAttribute("content", isDark ? "#1a1a18" : "#05535f");
+}
+
+function toggleDarkMode() {
+  const isDark = !document.body.classList.contains("dark");
+  localStorage.setItem(DARK_KEY, String(isDark));
+  applyDarkMode(isDark);
+}
+
 // ===========================================================================
 // API Key — stored in localStorage, never leaves the device except to Anthropic
 // ===========================================================================
@@ -593,6 +626,8 @@ window._deleteById = async (id) => {
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").catch(() => {});
 }
+const _savedDark = localStorage.getItem(DARK_KEY);
+applyDarkMode(_savedDark !== null ? _savedDark === "true" : window.matchMedia("(prefers-color-scheme: dark)").matches);
 setStatus(navigator.onLine);
 render();
 </script>

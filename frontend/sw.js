@@ -17,7 +17,7 @@
 // After editing: bump the CACHE version string (e.g. v15 → v16) so the
 // service worker reinstalls and users get the updated shell.
 
-const CACHE = "ai-notes-v15";
+const CACHE = "ai-notes-v16";
 const SHELL = [
   "./",
   "./index.html",

@@ -47,6 +47,12 @@ There is no local dev server. To test changes, open `frontend/index.html` direct
 
 `ALLOWED_TAGS` and `buildPrompt()` in `index.html` are the two things to edit when tuning tag quality or enhancement output. The model is `claude-haiku-4-5-20251001`. The prompt enforces a fixed JSON schema — `parseResult()` validates and filters the response.
 
+## Git workflow
+
+- **Always branch from `main`.** Before creating any feature branch, run `git checkout main && git pull origin main`. Never branch off another feature branch.
+- **Never push directly to `main`.** All changes go through a `feature/` branch and PR.
+- **One PR per feature.** Open the PR against `main` once the branch is ready.
+
 ## Design decisions to preserve
 
 - **No build step.** Keep the frontend as a single plain HTML file. No bundlers, no frameworks.

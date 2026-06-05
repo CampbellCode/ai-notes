@@ -325,25 +325,29 @@ New note to route:
 ${noteText}
 """
 
-Decide whether to APPEND this to an existing note as a new list item, or create a NEW standalone note with full enrichment.
+Decide whether to APPEND this to an existing note as a new list item, or create a NEW standalone note.
 
-Choose "append" when the note is a short task, reminder, or item that clearly belongs to an existing list or collection.
-Choose "new" for anything that is a new topic, idea, or thought, or when you are unsure.
+Choose "append" when:
+- The note is a short task or reminder that belongs to an existing list, OR
+- The note mentions the same subject, entity, vehicle, project, or person as an existing note (even if the specific task is different).
+Strongly prefer "append" for short task sentences (under 20 words) when any existing note shares the same subject.
+
+Choose "new" only when no existing note matches the subject at all.
 
 For "append":
-{"action":"append","targetId":"<id of the matching existing note>","item":"<cleaned item text>"}
+{"action":"append","targetId":"<id of the matching existing note>","item":"<user's task text, lightly cleaned>"}
 
 For "new":
-{"action":"new","tags":[],"contextTags":[],"title":"","summary":"","steps":[],"tips":[],"links":[]}
+{"action":"new","tags":[],"contextTags":[],"title":"","summary":"","steps":["<user's task text, lightly cleaned>"],"tips":[],"links":[]}
 
-Rules for "new" enrichment:
+Rules for "new":
 - tags: subset of ONLY: ${ALLOWED_TAGS.join(", ")} (empty array if none fit)
 - contextTags: 3–8 specific lowercase single-word or hyphenated semantic tags
-- title: short descriptive title (a few words, no trailing punctuation)
-- summary: 2–4 sentence overview
-- steps: concrete actionable next steps — full instructions. Empty array if none.
-- tips: helpful tips or best practices. Empty array if none.
-- links: [{"label":"...","url":"https://..."}] — only real well-known URLs. Empty array if none.
+- title: a short GROUP title for this collection (e.g. "My Pajero", "Work Tasks") — NOT a paraphrase of the task itself
+- summary: 1–2 sentences describing what kind of tasks this note will collect
+- steps: ALWAYS put only the user's own input text (lightly cleaned) as a single item. NEVER generate how-to sub-tasks or instructions.
+- tips: always empty array []
+- links: always empty array []
 
 Respond with ONLY valid JSON, no other text.`;
 }

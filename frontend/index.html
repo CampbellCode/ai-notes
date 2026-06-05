@@ -501,20 +501,24 @@ function formatTimestamp(ts) {
   });
 }
 
-function buildPrompt(noteText, contextNotes) {
+function buildPrompt(noteText, contextNotes, contextTagVocab) {
   const contextSection = contextNotes && contextNotes.length > 0
     ? `\nRelated notes for context — use these to inform your enhancement where relevant:\n${
         contextNotes.map(n => `- "${n.title}": ${n.summary}`).join("\n")
       }\n`
     : "";
 
+  const vocabSection = contextTagVocab && contextTagVocab.length > 0
+    ? `\nExisting context tag vocabulary — prefer reusing these where they fit; only introduce new tags if nothing existing applies:\n${contextTagVocab.join(", ")}\n`
+    : "";
+
   return `You are a research and tagging assistant for a personal notes app. Be genuinely helpful and detailed.
-${contextSection}
+${contextSection}${vocabSection}
 Classify the note into one or more of these tags ONLY:
 ${ALLOWED_TAGS.join(", ")}.
 If none fit well, use an empty array. Do NOT invent new tags.
 
-Also generate contextTags: 3–8 specific, lowercase, single-word or hyphenated semantic tags (e.g. "react", "authentication", "project-alpha") used for internal cross-referencing between notes. These can be more specific than the visible tags.
+Also generate contextTags: 3–8 specific, lowercase, single-word or hyphenated semantic tags (e.g. "react", "authentication", "project-alpha") used for internal cross-referencing between notes. Prefer tags from the existing vocabulary above; only add new ones if genuinely nothing existing fits.
 
 Then provide a rich, detailed enhancement:
 - title: a short, descriptive title for the note (a few words, no trailing punctuation)
@@ -577,6 +581,11 @@ async function enhance(note) {
   try {
     const allNotes = await dbGetAll();
     const contextNotes = findRelatedNotes(note.text, allNotes, note.id);
+    const contextTagVocab = [...new Set(
+      allNotes
+        .filter(n => n.id !== note.id && n.contextTags?.length)
+        .flatMap(n => n.contextTags)
+    )].sort();
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -589,7 +598,7 @@ async function enhance(note) {
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 2048,
-        messages: [{ role: "user", content: buildPrompt(note.text, contextNotes) }],
+        messages: [{ role: "user", content: buildPrompt(note.text, contextNotes, contextTagVocab) }],
       }),
     });
 

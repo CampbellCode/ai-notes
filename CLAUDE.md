@@ -9,7 +9,10 @@ Fully browser-based PWA — no backend, no build step, no node_modules. The enti
 ```
 Phone browser (PWA)
   └─ Notes → IndexedDB (local, permanent, no network needed)
-  └─ Enhance → fetch() → api.anthropic.com (only when online, only on demand)
+  └─ Save note → autoTriage() → api.anthropic.com (if online + API key)
+       ├─ action:"append" → item added to existing note's steps[], new note discarded, toast shown
+       └─ action:"new"    → full enrichment saved directly (status:"enhanced")
+  └─ Enhance button → manual re-enrich for pending notes (offline fallback)
 ```
 
 The Anthropic API is called directly from the browser using the `anthropic-dangerous-direct-browser-access: true` header — this is intentional and Anthropic's official opt-in for this pattern. The user's API key is stored in `localStorage` under `anthropic_api_key` and never touches any server other than Anthropic.
@@ -45,11 +48,15 @@ There is no local dev server. To test changes, open `frontend/index.html` direct
 
 ## Tuning the AI
 
-`ALLOWED_TAGS` and `buildPrompt()` in `index.html` are the two things to edit when tuning tag quality or enhancement output. The model is `claude-haiku-4-5-20251001`. The prompt enforces a fixed JSON schema — `parseResult()` validates and filters the response.
+- `ALLOWED_TAGS` — controls visible tag vocabulary for both triage and enrichment.
+- `buildTriagePrompt()` — the routing decision prompt. Adjust to tune append-vs-new sensitivity.
+- `buildPrompt()` / `buildIncrementalPrompt()` — used by the manual Enhance button for pending notes.
+- Model is `claude-haiku-4-5-20251001`. All prompts enforce a fixed JSON schema validated by `parseTriageResult()` / `parseResult()`.
 
 ## Design decisions to preserve
 
 - **No build step.** Keep the frontend as a single plain HTML file. No bundlers, no frameworks.
 - **Notes are never sent to any server we control.** IndexedDB is the source of truth; the only outbound call is directly to Anthropic.
-- **Manual enhance only.** No background sync. The Enhance button is intentionally tap-to-trigger.
+- **Auto-triage on save.** When online with an API key, saving a note fires `autoTriage()` — one API call decides append vs. new. Offline or no-key saves fall back to `status:"pending"` and the manual Enhance button.
+- **Silent merge.** Appended items are added to the target note's `steps[]` without a confirmation prompt; a toast confirms what happened.
 - **`canEnhance` requires both `isOnline` and a saved API key.** Don't loosen this check.

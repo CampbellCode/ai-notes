@@ -110,6 +110,29 @@
     background: var(--purple-light);
     color: var(--purple);
   }
+  .context-tag {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    background: var(--bg);
+    border: 1px dashed var(--border);
+    color: var(--muted);
+    font-family: monospace;
+  }
+  .context-tags-section {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+  }
+  .context-tags-label {
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+  }
+  .context-tags-list { display: flex; flex-wrap: wrap; gap: 6px; }
   .badge { font-size: 12px; color: var(--muted); }
   .badge.pending { color: var(--amber); }
   .badge.enhanced { color: var(--green); }
@@ -478,12 +501,20 @@ function formatTimestamp(ts) {
   });
 }
 
-function buildPrompt(noteText) {
-  return `You are a research and tagging assistant for a personal notes app. Be genuinely helpful and detailed.
+function buildPrompt(noteText, contextNotes) {
+  const contextSection = contextNotes && contextNotes.length > 0
+    ? `\nRelated notes for context — use these to inform your enhancement where relevant:\n${
+        contextNotes.map(n => `- "${n.title}": ${n.summary}`).join("\n")
+      }\n`
+    : "";
 
+  return `You are a research and tagging assistant for a personal notes app. Be genuinely helpful and detailed.
+${contextSection}
 Classify the note into one or more of these tags ONLY:
 ${ALLOWED_TAGS.join(", ")}.
 If none fit well, use an empty array. Do NOT invent new tags.
+
+Also generate contextTags: 3–8 specific, lowercase, single-word or hyphenated semantic tags (e.g. "react", "authentication", "project-alpha") used for internal cross-referencing between notes. These can be more specific than the visible tags.
 
 Then provide a rich, detailed enhancement:
 - title: a short, descriptive title for the note (a few words, no trailing punctuation)
@@ -493,7 +524,7 @@ Then provide a rich, detailed enhancement:
 - links: array of relevant, genuinely useful resources, each an object {"label": "short description", "url": "https://..."}. Only include real, well-known URLs you are confident exist — never invent links. Empty array if none.
 
 Respond with ONLY valid JSON in exactly this shape, no other text:
-{"tags": [], "title": "", "summary": "", "steps": [], "tips": [], "links": []}
+{"tags": [], "contextTags": [], "title": "", "summary": "", "steps": [], "tips": [], "links": []}
 
 Note:
 """
@@ -507,6 +538,9 @@ function parseResult(raw) {
   const tags = Array.isArray(parsed.tags)
     ? parsed.tags.filter(t => ALLOWED_TAGS.includes(t))
     : [];
+  const contextTags = Array.isArray(parsed.contextTags)
+    ? parsed.contextTags.filter(t => typeof t === "string" && t.trim()).map(t => t.trim().toLowerCase())
+    : [];
   const links = Array.isArray(parsed.links)
     ? parsed.links
         .filter(l => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url))
@@ -514,12 +548,21 @@ function parseResult(raw) {
     : [];
   return {
     tags,
+    contextTags,
     title: typeof parsed.title === "string" ? parsed.title : "",
     summary: typeof parsed.summary === "string" ? parsed.summary : "",
     steps: Array.isArray(parsed.steps) ? parsed.steps : [],
     tips: Array.isArray(parsed.tips) ? parsed.tips : [],
     links,
   };
+}
+
+function findRelatedNotes(noteText, allNotes, currentNoteId) {
+  const words = new Set(noteText.toLowerCase().split(/\W+/).filter(w => w.length > 3));
+  return allNotes
+    .filter(n => n.id !== currentNoteId && n.status === "enhanced" && n.contextTags?.length && n.summary && n.title)
+    .filter(n => n.contextTags.some(tag => words.has(tag) || [...words].some(w => tag.includes(w) || w.includes(tag))))
+    .slice(0, 5);
 }
 
 async function enhance(note) {
@@ -532,6 +575,9 @@ async function enhance(note) {
   if (btn) { btn.disabled = true; btn.textContent = "Enhancing…"; }
 
   try {
+    const allNotes = await dbGetAll();
+    const contextNotes = findRelatedNotes(note.text, allNotes, note.id);
+
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -543,7 +589,7 @@ async function enhance(note) {
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 2048,
-        messages: [{ role: "user", content: buildPrompt(note.text) }],
+        messages: [{ role: "user", content: buildPrompt(note.text, contextNotes) }],
       }),
     });
 
@@ -621,12 +667,20 @@ function renderDetail(n, canEnhance) {
     const links = (n.links || []).map(l =>
       `<li><a href="${escapeHtml(l.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label)}</a></li>`
     ).join("");
+    const ctags = (n.contextTags || []);
+    const contextTagsHtml = ctags.length
+      ? `<div class="context-tags-section">
+           <div class="context-tags-label">Context tags</div>
+           <div class="context-tags-list">${ctags.map(t => `<span class="context-tag">${escapeHtml(t)}</span>`).join("")}</div>
+         </div>`
+      : "";
     enhancement = `
       <div class="enhancement">
         ${n.summary ? `<div class="summary">${escapeHtml(n.summary)}</div>` : ""}
         ${steps ? `<h4>Steps</h4><ol>${steps}</ol>` : ""}
         ${tips ? `<h4>Tips</h4><ul>${tips}</ul>` : ""}
         ${links ? `<h4>Links</h4><ul class="links">${links}</ul>` : ""}
+        ${contextTagsHtml}
       </div>`;
   }
 

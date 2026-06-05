@@ -1,6 +1,6 @@
 // sw.js — caches the app shell so the PWA opens with no network at all.
 
-const CACHE = "ai-notes-v9";
+const CACHE = "ai-notes-v10";
 const SHELL = ["./", "./index.html", "./manifest.json"];
 
 self.addEventListener("install", (event) => {

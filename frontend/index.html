@@ -156,6 +156,20 @@
   .note-compact:hover, .note-compact:active { background: var(--purple-light); }
   .note-list-title { font-size: 15px; font-weight: 600; line-height: 1.4; }
   .note-list-meta { display: flex; gap: 8px; align-items: center; margin-top: 5px; }
+  .note-edit-textarea {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    resize: vertical;
+    min-height: 120px;
+    outline: none;
+  }
+  .note-edit-textarea:focus { border-color: var(--purple); }
+  .edit-actions { display: flex; gap: 8px; margin-top: 8px; }
   .back-btn {
     display: inline-flex;
     align-items: center;
@@ -536,6 +550,41 @@ ${noteText}
 """`;
 }
 
+function buildIncrementalPrompt(noteText, existingNote, contextNotes, contextTagVocab) {
+  const contextSection = contextNotes && contextNotes.length > 0
+    ? `\nRelated notes for context:\n${contextNotes.map(n => `- "${n.title}": ${n.summary}`).join("\n")}\n`
+    : "";
+
+  const vocabSection = contextTagVocab && contextTagVocab.length > 0
+    ? `\nExisting context tag vocabulary — prefer reusing these:\n${contextTagVocab.join(", ")}\n`
+    : "";
+
+  const prior = JSON.stringify({
+    tags: existingNote.tags || [],
+    contextTags: existingNote.contextTags || [],
+    title: existingNote.title || "",
+    summary: existingNote.summary || "",
+    steps: existingNote.steps || [],
+    tips: existingNote.tips || [],
+    links: existingNote.links || [],
+  }, null, 2);
+
+  return `You are a research and tagging assistant for a personal notes app.
+${contextSection}${vocabSection}
+This note has been edited. Previous enrichment:
+${prior}
+
+Re-enrich using the full updated note below. Reuse fields that are still accurate; update only what the new content warrants. Keep contextTags stable — prefer existing ones, add new only if clearly needed. Visible tags must only be from: ${ALLOWED_TAGS.join(", ")}.
+
+Respond with ONLY valid JSON in exactly this shape, no other text:
+{"tags": [], "contextTags": [], "title": "", "summary": "", "steps": [], "tips": [], "links": []}
+
+Updated note:
+"""
+${noteText}
+"""`;
+}
+
 function parseResult(raw) {
   const cleaned = raw.replace(/```json|```/g, "").trim();
   const parsed = JSON.parse(cleaned);
@@ -573,10 +622,11 @@ async function enhance(note) {
   const apiKey = getApiKey();
   if (!isOnline || !apiKey) return;
 
+  const isReEnrich = !!(note.title || note.summary);
   const errEl = document.getElementById("err-" + note.id);
   const btn = document.getElementById("btn-" + note.id);
   if (errEl) errEl.textContent = "";
-  if (btn) { btn.disabled = true; btn.textContent = "Enhancing…"; }
+  if (btn) { btn.disabled = true; btn.textContent = isReEnrich ? "Re-enriching…" : "Enhancing…"; }
 
   try {
     const allNotes = await dbGetAll();
@@ -586,6 +636,10 @@ async function enhance(note) {
         .filter(n => n.id !== note.id && n.contextTags?.length)
         .flatMap(n => n.contextTags)
     )].sort();
+
+    const prompt = isReEnrich
+      ? buildIncrementalPrompt(note.text, note, contextNotes, contextTagVocab)
+      : buildPrompt(note.text, contextNotes, contextTagVocab);
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -598,7 +652,7 @@ async function enhance(note) {
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 2048,
-        messages: [{ role: "user", content: buildPrompt(note.text, contextNotes, contextTagVocab) }],
+        messages: [{ role: "user", content: prompt }],
       }),
     });
 
@@ -615,7 +669,7 @@ async function enhance(note) {
     render();
   } catch (err) {
     if (errEl) errEl.textContent = "Enhance failed: " + err.message;
-    if (btn) { btn.disabled = false; btn.textContent = "Enhance"; }
+    if (btn) { btn.disabled = false; btn.textContent = isReEnrich ? "Re-enrich" : "Enhance"; }
   }
 }
 
@@ -624,6 +678,7 @@ async function enhance(note) {
 // ===========================================================================
 const notesEl = document.getElementById("notes");
 let selectedNoteId = null;
+let editingNoteId = null;
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => (
@@ -639,6 +694,7 @@ function openNote(id) {
 
 function closeNote() {
   selectedNoteId = null;
+  editingNoteId = null;
   window.scrollTo(0, 0);
   render();
 }
@@ -648,10 +704,11 @@ function renderCompact(n) {
   const statusClass = n.status === "enhanced" ? "enhanced" : "pending";
   const statusLabel = n.status === "enhanced" ? "✓ enhanced" : "● pending";
   const canEnhance = isOnline && !!getApiKey() && n.status === "pending";
+  const enhanceBtnLabel = (n.title || n.summary) ? "Re-enrich" : "Enhance";
   const enhanceBtn = n.status === "pending"
     ? `<button class="btn-secondary btn-small" id="btn-${n.id}"
          ${canEnhance ? "" : "disabled"}
-         onclick="event.stopPropagation(); window._enhanceById('${n.id}')">Enhance</button>`
+         onclick="event.stopPropagation(); window._enhanceById('${n.id}')">${enhanceBtnLabel}</button>`
     : "";
   return `
     <div class="note note-compact" onclick="openNote('${n.id}')">
@@ -668,9 +725,24 @@ function renderCompact(n) {
 
 function renderDetail(n, canEnhance) {
   const tags = (n.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("");
+  const isEditing = editingNoteId === n.id;
+  const wasEnriched = !!(n.title || n.summary);
+  const enhanceBtnLabel = wasEnriched ? "Re-enrich" : "Enhance";
+
+  let bodyHtml;
+  if (isEditing) {
+    bodyHtml = `
+      <textarea id="edit-textarea-${n.id}" class="note-edit-textarea">${escapeHtml(n.text)}</textarea>
+      <div class="edit-actions">
+        <button class="btn-primary btn-small" onclick="window._saveEdit('${n.id}')">Save</button>
+        <button class="btn-secondary btn-small" onclick="window._cancelEdit()">Cancel</button>
+      </div>`;
+  } else {
+    bodyHtml = `<div class="note-text">${escapeHtml(n.text)}</div>`;
+  }
 
   let enhancement = "";
-  if (n.status === "enhanced") {
+  if (!isEditing && n.status === "enhanced") {
     const steps = (n.steps || n.actionItems || []).map(a => `<li>${escapeHtml(a)}</li>`).join("");
     const tips = (n.tips || n.suggestions || []).map(s => `<li>${escapeHtml(s)}</li>`).join("");
     const links = (n.links || []).map(l =>
@@ -697,17 +769,18 @@ function renderDetail(n, canEnhance) {
     <button class="back-btn" onclick="closeNote()">← Back</button>
     <div class="note">
       ${n.title ? `<div class="note-title">${escapeHtml(n.title)}</div>` : ""}
-      <div class="note-text">${escapeHtml(n.text)}</div>
+      ${bodyHtml}
       <div class="note-meta">
         ${tags}
         <span class="badge timestamp" title="Created">${escapeHtml(formatTimestamp(n.createdAt))}</span>
         <span class="badge ${n.status}">${n.status === "enhanced" ? "✓ enhanced" : "● pending"}</span>
         ${n.costAUD != null ? `<span class="badge" title="Estimated API cost">${formatCost(n.costAUD)}</span>` : ""}
         <span class="spacer"></span>
-        ${n.status === "pending"
+        ${!isEditing ? `<button class="btn-secondary btn-small" onclick="window._editNote('${n.id}')">Edit</button>` : ""}
+        ${n.status === "pending" && !isEditing
           ? `<button class="btn-secondary btn-small" id="btn-${n.id}"
                ${canEnhance ? "" : "disabled"}
-               onclick="window._enhanceById('${n.id}')">Enhance</button>`
+               onclick="window._enhanceById('${n.id}')">${enhanceBtnLabel}</button>`
           : ""}
         <button class="btn-danger btn-small" onclick="window._deleteById('${n.id}')">Delete</button>
       </div>
@@ -742,6 +815,29 @@ async function render() {
 
   notesEl.innerHTML = notes.map(renderCompact).join("");
 }
+
+window._editNote = (id) => {
+  editingNoteId = id;
+  render();
+};
+
+window._cancelEdit = () => {
+  editingNoteId = null;
+  render();
+};
+
+window._saveEdit = async (id) => {
+  const textarea = document.getElementById("edit-textarea-" + id);
+  if (!textarea) return;
+  const newText = textarea.value.trim();
+  if (!newText) return;
+  const notes = await dbGetAll();
+  const note = notes.find(n => n.id === id);
+  if (!note) return;
+  await dbPut({ ...note, text: newText, status: "pending" });
+  editingNoteId = null;
+  render();
+};
 
 window._enhanceById = async (id) => {
   const notes = await dbGetAll();

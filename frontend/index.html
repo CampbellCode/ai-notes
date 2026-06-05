@@ -241,6 +241,29 @@
   body.dark .btn-danger { background: #2a1010; color: #e87070; }
   body.dark .settings-card input[type="password"],
   body.dark .settings-card input[type="text"] { background: var(--bg); color: var(--text); }
+
+  /* Toast notification */
+  #toast {
+    position: fixed;
+    bottom: calc(24px + env(safe-area-inset-bottom));
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--text);
+    color: var(--bg);
+    padding: 10px 18px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+    opacity: 0;
+    transition: opacity 0.25s, transform 0.25s;
+    pointer-events: none;
+    white-space: nowrap;
+    z-index: 200;
+  }
+  #toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 </style>
 </head>
 <body>
@@ -291,6 +314,8 @@
     </div>
   </div>
 </div>
+
+<div id="toast"></div>
 
 <script>
 // ===========================================================================
@@ -424,22 +449,9 @@ const composerError = document.getElementById("composerError");
 document.getElementById("saveBtn").addEventListener("click", async () => {
   const text = input.value.trim();
   if (!text) return;
-  const note = {
-    id: crypto.randomUUID(),
-    text,
-    status: "pending",
-    tags: [],
-    title: "",
-    summary: "",
-    steps: [],
-    tips: [],
-    links: [],
-    createdAt: Date.now(),
-  };
-  await dbPut(note);
   input.value = "";
   composerError.textContent = "";
-  render();
+  await autoTriage(text, document.getElementById("saveBtn"));
 });
 
 // ===========================================================================
@@ -585,6 +597,76 @@ ${noteText}
 """`;
 }
 
+function buildTriagePrompt(noteText, notesIndex) {
+  const indexSection = notesIndex.length > 0
+    ? `\nExisting notes:\n${JSON.stringify(notesIndex, null, 2)}\n`
+    : "\nNo existing notes yet.\n";
+
+  return `You are a smart routing assistant for a personal notes app.
+${indexSection}
+New note to route:
+"""
+${noteText}
+"""
+
+Decide whether to APPEND this to an existing note as a new list item, or create a NEW standalone note with full enrichment.
+
+Choose "append" when the note is a short task, reminder, or item that clearly belongs to an existing list or collection.
+Choose "new" for anything that is a new topic, idea, or thought, or when you are unsure.
+
+For "append":
+{"action":"append","targetId":"<id of the matching existing note>","item":"<cleaned item text>"}
+
+For "new":
+{"action":"new","tags":[],"contextTags":[],"title":"","summary":"","steps":[],"tips":[],"links":[]}
+
+Rules for "new" enrichment:
+- tags: subset of ONLY: ${ALLOWED_TAGS.join(", ")} (empty array if none fit)
+- contextTags: 3–8 specific lowercase single-word or hyphenated semantic tags
+- title: short descriptive title (a few words, no trailing punctuation)
+- summary: 2–4 sentence overview
+- steps: concrete actionable next steps — full instructions. Empty array if none.
+- tips: helpful tips or best practices. Empty array if none.
+- links: [{"label":"...","url":"https://..."}] — only real well-known URLs. Empty array if none.
+
+Respond with ONLY valid JSON, no other text.`;
+}
+
+function parseTriageResult(raw) {
+  const cleaned = raw.replace(/```json|```/g, "").trim();
+  const parsed = JSON.parse(cleaned);
+
+  if (parsed.action === "append") {
+    return {
+      action: "append",
+      targetId: typeof parsed.targetId === "string" ? parsed.targetId : null,
+      item: typeof parsed.item === "string" ? parsed.item.trim() : "",
+    };
+  }
+
+  const tags = Array.isArray(parsed.tags)
+    ? parsed.tags.filter(t => ALLOWED_TAGS.includes(t))
+    : [];
+  const contextTags = Array.isArray(parsed.contextTags)
+    ? parsed.contextTags.filter(t => typeof t === "string" && t.trim()).map(t => t.trim().toLowerCase())
+    : [];
+  const links = Array.isArray(parsed.links)
+    ? parsed.links
+        .filter(l => l && typeof l.url === "string" && /^https?:\/\//i.test(l.url))
+        .map(l => ({ label: typeof l.label === "string" && l.label ? l.label : l.url, url: l.url }))
+    : [];
+  return {
+    action: "new",
+    tags,
+    contextTags,
+    title: typeof parsed.title === "string" ? parsed.title : "",
+    summary: typeof parsed.summary === "string" ? parsed.summary : "",
+    steps: Array.isArray(parsed.steps) ? parsed.steps : [],
+    tips: Array.isArray(parsed.tips) ? parsed.tips : [],
+    links,
+  };
+}
+
 function parseResult(raw) {
   const cleaned = raw.replace(/```json|```/g, "").trim();
   const parsed = JSON.parse(cleaned);
@@ -670,6 +752,112 @@ async function enhance(note) {
   } catch (err) {
     if (errEl) errEl.textContent = "Enhance failed: " + err.message;
     if (btn) { btn.disabled = false; btn.textContent = isReEnrich ? "Re-enrich" : "Enhance"; }
+  }
+}
+
+function showToast(message) {
+  const el = document.getElementById("toast");
+  el.textContent = message;
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 3000);
+}
+
+async function autoTriage(rawText, saveBtn) {
+  const apiKey = getApiKey();
+
+  if (!isOnline || !apiKey) {
+    await dbPut({
+      id: crypto.randomUUID(),
+      text: rawText,
+      status: "pending",
+      tags: [],
+      title: "",
+      summary: "",
+      steps: [],
+      tips: [],
+      links: [],
+      createdAt: Date.now(),
+    });
+    render();
+    return;
+  }
+
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Routing…"; }
+
+  try {
+    const allNotes = await dbGetAll();
+    const notesIndex = allNotes
+      .filter(n => n.status === "enhanced" && n.title)
+      .map(n => ({ id: n.id, title: n.title, tags: n.tags || [], contextTags: n.contextTags || [] }));
+
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 2048,
+        messages: [{ role: "user", content: buildTriagePrompt(rawText, notesIndex) }],
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`API error ${res.status}: ${body}`);
+    }
+
+    const data = await res.json();
+    const result = parseTriageResult(data.content[0].text);
+    const { input_tokens, output_tokens } = data.usage;
+    const costAUD = calcCostAUD(input_tokens, output_tokens);
+
+    if (result.action === "append" && result.targetId && result.item) {
+      const freshNotes = await dbGetAll();
+      const target = freshNotes.find(n => n.id === result.targetId);
+      if (target) {
+        await dbPut({
+          ...target,
+          steps: [...(target.steps || []), result.item],
+          costAUD: (target.costAUD || 0) + costAUD,
+        });
+        showToast(`Added to "${target.title}"`);
+        render();
+        return;
+      }
+    }
+
+    // action === "new" (or append target not found — fall back to new note)
+    const { action, ...enrichment } = result;
+    await dbPut({
+      id: crypto.randomUUID(),
+      text: rawText,
+      status: "enhanced",
+      createdAt: Date.now(),
+      costAUD,
+      ...enrichment,
+    });
+    render();
+  } catch (err) {
+    await dbPut({
+      id: crypto.randomUUID(),
+      text: rawText,
+      status: "pending",
+      tags: [],
+      title: "",
+      summary: "",
+      steps: [],
+      tips: [],
+      links: [],
+      createdAt: Date.now(),
+    });
+    composerError.textContent = "Auto-routing failed — saved as pending.";
+    render();
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save note"; }
   }
 }
 
